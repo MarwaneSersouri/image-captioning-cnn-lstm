@@ -19,4 +19,4 @@ training:
   freq_threshold: 5
 
 output:
-  model_dir: "outputs/"
+  model_dir: "/content/drive/MyDrive/image-captioning-outputs/"
