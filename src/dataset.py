@@ -40,7 +40,7 @@ class Flickr8kDataset(Dataset):
         # Construire le vocabulaire
         if vocab is None:
             self.vocab = Vocabulary(freq_threshold)
-            self.vocab.build_vocab(self.captions)
+            self.vocab.build_vocabulary(self.captions)
         else:
             self.vocab = vocab
 
