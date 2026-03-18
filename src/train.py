@@ -11,15 +11,12 @@ from dataset import Flickr8kDataset, collate_fn
 from model.captioning_model import ImageCaptioningModel
 
 def train():
-    # Charger la config
     with open("configs/base.yaml", "r") as f:
         config = yaml.safe_load(f)
 
-    # GPU si disponible, sinon CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Utilisation de : {device}")
 
-    # Charger le dataset
     dataset = Flickr8kDataset(
         img_dir=config["data"]["img_dir"],
         captions_file=config["data"]["captions_file"],
@@ -37,7 +34,6 @@ def train():
     vocab_size = len(dataset.vocab)
     print(f"Taille du vocabulaire : {vocab_size}")
 
-    # Créer le modèle
     model = ImageCaptioningModel(
         embed_size=config["model"]["embed_size"],
         hidden_size=config["model"]["hidden_size"],
@@ -46,11 +42,9 @@ def train():
         dropout=config["model"]["dropout"]
     ).to(device)
 
-    # Loss et optimizer
     criterion = nn.CrossEntropyLoss(ignore_index=dataset.vocab.stoi["<pad>"])
     optimizer = optim.Adam(model.parameters(), lr=config["training"]["learning_rate"])
 
-    # Boucle d'entraînement
     num_epochs = config["training"]["num_epochs"]
     for epoch in range(num_epochs):
         model.train()
@@ -60,18 +54,13 @@ def train():
             imgs = imgs.to(device)
             captions = captions.to(device)
 
-            # Forward pass
-            # Input : tout sauf le dernier token
-            # Target : tout sauf le premier token (<start>)
             outputs = model(imgs, captions[:, :-1])
-
-            # Calculer la loss
             outputs = outputs[:, 1:, :]
-	    targets = captions[:, 1:].reshape(-1)
-	    outputs = outputs.reshape(-1, vocab_size)
+
+            targets = captions[:, 1:].reshape(-1)
+            outputs = outputs.reshape(-1, vocab_size)
             loss = criterion(outputs, targets)
 
-            # Backpropagation
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -84,11 +73,12 @@ def train():
         avg_loss = total_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{num_epochs}] Loss moyenne: {avg_loss:.4f}")
 
-        # Sauvegarder le modèle à chaque epoch
         os.makedirs(config["output"]["model_dir"], exist_ok=True)
         torch.save(model.state_dict(), f"{config['output']['model_dir']}/model_epoch_{epoch+1}.pth")
 
-    print("Entraînement terminé !")
+    print("Entrainement termine !")
 
 if __name__ == "__main__":
     train()
+
+
