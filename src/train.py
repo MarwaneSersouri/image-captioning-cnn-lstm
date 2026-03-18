@@ -66,8 +66,9 @@ def train():
             outputs = model(imgs, captions[:, :-1])
 
             # Calculer la loss
-            targets = captions[:, 1:].reshape(-1)
-            outputs = outputs.reshape(-1, vocab_size)
+            outputs = outputs[:, 1:, :]
+	    targets = captions[:, 1:].reshape(-1)
+	    outputs = outputs.reshape(-1, vocab_size)
             loss = criterion(outputs, targets)
 
             # Backpropagation
