@@ -10,4 +10,4 @@ data/raw/
 data/processed/
 
 outputs/checkpoints/
-outputs/figures/
+outputs/figures/data/ 
