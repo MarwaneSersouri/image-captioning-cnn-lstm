@@ -4,19 +4,20 @@ data:
   img_dir: "data/Flicker8k_Dataset"
   captions_file: "data/Flickr8k.token.txt"
   train_file: "data/Flickr_8k.trainImages.txt"
+  dev_file: "data/Flickr_8k.devImages.txt"
   test_file: "data/Flickr_8k.testImages.txt"
 
 model:
-  embed_size: 512
-  hidden_size: 1024
-  num_layers: 2
-  dropout: 0.5
+  embed_size: 128
+  hidden_size: 256
+  num_layers: 1
+  dropout: 0.3
 
 training:
-  batch_size: 64
-  num_epochs: 30
-  learning_rate: 0.001
-  freq_threshold: 5
+  batch_size: 16
+  num_epochs: 15
+  learning_rate: 0.0005
+  freq_threshold: 10
 
 output:
-  model_dir: "/content/drive/MyDrive/image-captioning-outputs/"
+  model_dir: "outputs"

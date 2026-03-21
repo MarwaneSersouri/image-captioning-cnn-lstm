@@ -1,3 +1,7 @@
+.vscode/
+src.zip
+.DS_Store
+
 __pycache__/
 *.pyc
 .venv/
@@ -6,8 +10,7 @@ venv/
 .ipynb_checkpoints/
 .DS_Store
 
-data/raw/
-data/processed/
 
-outputs/checkpoints/
-outputs/figures/data/ 
+
+data/
+outputs/
