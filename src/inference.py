@@ -1,122 +1,142 @@
 import os
-import sys
-import yaml
 import torch
 from PIL import Image
+from collections import Counter
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Dataset
 import torchvision.transforms as transforms
-from matplotlib import pyplot as plt
 
 
-sys.path.append(os.path.dirname(__file__))
+class Vocabulary:
+    def __init__(self, freq_threshold):
+        self.itos = {
+            0: "<pad>",
+            1: "<start>",
+            2: "<end>",
+            3: "<unk>"
+        }
+        self.stoi = {
+            "<pad>": 0,
+            "<start>": 1,
+            "<end>": 2,
+            "<unk>": 3
+        }
+        self.freq_threshold = freq_threshold
 
-from dataset import Flickr8kDataset
-from model.captioning_model import ImageCaptioningModel
+    def __len__(self):
+        return len(self.itos)
 
+    def tokenizer(self, text):
+        return text.lower().strip().split()
 
-def load_config():
-    with open("configs/base.yaml", "r") as f:
-        return yaml.safe_load(f)
+    def build_vocabulary(self, sentence_list):
+        frequencies = Counter()
+        idx = 4
 
+        for sentence in sentence_list:
+            for word in self.tokenizer(sentence):
+                frequencies[word] += 1
 
-def get_transform():
-    return transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        )
-    ])
+                if frequencies[word] == self.freq_threshold:
+                    self.stoi[word] = idx
+                    self.itos[idx] = word
+                    idx += 1
 
-
-def load_vocab(config):
-    train_dataset = Flickr8kDataset(
-        img_dir=config["data"]["img_dir"],
-        captions_file=config["data"]["captions_file"],
-        train_file=config["data"]["train_file"],
-        freq_threshold=config["training"]["freq_threshold"]
-    )
-    return train_dataset.vocab
-
-
-def load_model(config, vocab, model_path, device):
-    model = ImageCaptioningModel(
-        embed_size=config["model"]["embed_size"],
-        hidden_size=config["model"]["hidden_size"],
-        vocab_size=len(vocab),
-        num_layers=config["model"]["num_layers"],
-        dropout=config["model"]["dropout"]
-    ).to(device)
-
-    state_dict = torch.load(model_path, map_location=device)
-    model.load_state_dict(state_dict)
-    model.eval()
-    return model
+    def numericalize(self, text):
+        tokenized_text = self.tokenizer(text)
+        return [
+            self.stoi[token] if token in self.stoi else self.stoi["<unk>"]
+            for token in tokenized_text
+        ]
 
 
-def predict_caption(image_path, model, vocab, device):
-    image = Image.open(image_path).convert("RGB")
-    transform = get_transform()
-    image = transform(image).unsqueeze(0).to(device)
+class Flickr8kDataset(Dataset):
+    def __init__(self, img_dir, captions_file, train_file, freq_threshold=5, transform=None):
+        self.img_dir = img_dir
+        self.transform = transform if transform is not None else transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor()
+        ])
 
-    with torch.no_grad():
-        feature = model.encoder(image).squeeze(0)
-        caption = model.decoder.generate(feature, vocab)
+        self.imgs = []
+        self.captions = []
 
-    return caption
+        # 1) Lire les noms d'images du split train
+        self.split_images = set()
+        with open(train_file, "r", encoding="utf-8") as f:
+            for line in f:
+                img_name = line.strip()
+                if not img_name:
+                    continue
+                img_name = os.path.basename(img_name)
+                self.split_images.add(img_name)
+
+        # 2) Lire les captions Flickr30k version Kaggle (CSV: image_name,comment)
+        with open(captions_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+
+                # ignorer header ou lignes vides
+                if not line or line.startswith("image_name"):
+                    continue
+
+                # couper seulement à la première virgule
+                parts = line.split(",", 1)
+                if len(parts) < 2:
+                    continue
+
+                img_name = os.path.basename(parts[0].strip())
+                caption = parts[1].strip().strip('"')
+
+                if img_name in self.split_images:
+                    self.imgs.append(img_name)
+                    self.captions.append(caption)
+
+        # sécurité
+        if len(self.imgs) == 0:
+            print("⚠️ Aucun sample trouvé")
+            print("img_dir =", img_dir)
+            print("captions_file =", captions_file)
+            print("train_file =", train_file)
+            print("nb split_images =", len(self.split_images))
+
+        # 3) vocab
+        self.vocab = Vocabulary(freq_threshold)
+        self.vocab.build_vocabulary(self.captions)
+
+    def __len__(self):
+        return len(self.imgs)
+
+    def __getitem__(self, index):
+        caption = self.captions[index]
+        img_path = os.path.join(self.img_dir, self.imgs[index])
+
+        image = Image.open(img_path).convert("RGB")
+        image = self.transform(image)
+
+        numericalized_caption = [self.vocab.stoi["<start>"]]
+        numericalized_caption += self.vocab.numericalize(caption)
+        numericalized_caption.append(self.vocab.stoi["<end>"])
+
+        return image, torch.tensor(numericalized_caption, dtype=torch.long)
 
 
-def get_test_image_path(config, index=0):
-    with open(config["data"]["test_file"], "r") as f:
-        test_images = [line.strip() for line in f if line.strip()]
-    image_name = test_images[index]
-    return os.path.join(config["data"]["img_dir"], image_name), image_name
+class MyCollate:
+    def __init__(self, pad_idx):
+        self.pad_idx = pad_idx
+
+    def __call__(self, batch):
+        imgs = [item[0].unsqueeze(0) for item in batch]
+        imgs = torch.cat(imgs, dim=0)
+
+        captions = [item[1] for item in batch]
+        lengths = [len(cap) for cap in captions]
+
+        captions = pad_sequence(captions, batch_first=True, padding_value=self.pad_idx)
+
+        return imgs, captions, lengths
 
 
-def get_ground_truth_captions(captions_file, image_name):
-    refs = []
-    with open(captions_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-
-            parts = line.split("\t")
-            if len(parts) != 2:
-                continue
-
-            img_id, caption = parts
-            img_name = img_id.split("#")[0].strip()
-
-            if img_name == image_name.strip():
-                refs.append(caption.strip())
-
-    return refs
-
-
-def inspect_feature(image_path, model, device):
-    image = Image.open(image_path).convert("RGB")
-    transform = get_transform()
-    image = transform(image).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        feature = model.encoder(image).squeeze(0).cpu()
-
-    print("Feature shape :", feature.shape)
-    print("Feature mean  :", feature.mean().item())
-    print("Feature std   :", feature.std().item())
-    print("Feature first5:", feature[:5].tolist())
-
-if __name__ == "__main__":
-    config = load_config()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    model_path = "/Users/marwanesersouri/Desktop/image-captioning-cnn-lstm/outputs/checkpoints/model_epoch_30.pth"
-
-    vocab = load_vocab(config)
-    model = load_model(config, vocab, model_path, device)
-    for idx in [0, 1, 2]:
-        image_path, image_name = get_test_image_path(config, index=idx)
-        print("\n" + "=" * 60)
-        print("Image :", image_name)
-        inspect_feature(image_path, model, device)
+def collate_fn(batch):
+    pad_idx = 0  # <pad>
+    return MyCollate(pad_idx)(batch)

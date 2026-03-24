@@ -20,13 +20,26 @@ def set_seed(seed):
         torch.cuda.manual_seed_all(seed)
 
 
+def init_weights(m):
+    if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+        nn.init.kaiming_uniform_(m.weight, nonlinearity="relu")
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+    elif isinstance(m, nn.Embedding):
+        nn.init.uniform_(m.weight, -0.1, 0.1)
+
+
 def train():
     with open("configs/base.yaml", "r") as f:
         config = yaml.safe_load(f)
 
     set_seed(config["seed"])
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+
     print(f"Utilisation de : {device}")
 
     dataset = Flickr8kDataset(
@@ -36,11 +49,16 @@ def train():
         freq_threshold=config["training"]["freq_threshold"]
     )
 
+    print(f"Taille du dataset : {len(dataset)}")
+
     dataloader = DataLoader(
         dataset,
         batch_size=config["training"]["batch_size"],
         shuffle=True,
-        collate_fn=collate_fn
+        collate_fn=collate_fn,
+        num_workers=4,
+        pin_memory=(device.type == "cuda"),
+        drop_last=True
     )
 
     vocab_size = len(dataset.vocab)
@@ -54,24 +72,51 @@ def train():
         dropout=config["model"]["dropout"]
     ).to(device)
 
+    model.apply(init_weights)
+
     criterion = nn.CrossEntropyLoss(ignore_index=dataset.vocab.stoi["<pad>"])
-    optimizer = optim.Adam(model.parameters(), lr=config["training"]["learning_rate"])
+
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=config["training"]["learning_rate"],
+        weight_decay=1e-4
+    )
+
+    output_dir = config["output"]["model_dir"]
+    os.makedirs(output_dir, exist_ok=True)
+
+    best_model_path = os.path.join(output_dir, "best_model.pth")
+    checkpoint_path = os.path.join(output_dir, "checkpoint.pth")
 
     num_epochs = config["training"]["num_epochs"]
-    os.makedirs(config["output"]["model_dir"], exist_ok=True)
+    best_loss = float("inf")
+    start_epoch = 0
 
-    for epoch in range(num_epochs):
+    # Reprise auto si un checkpoint existe
+    if os.path.exists(checkpoint_path):
+        print(f"Checkpoint trouvé : {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        start_epoch = checkpoint["epoch"] + 1
+        best_loss = checkpoint["best_loss"]
+
+        print(f"Reprise à partir de l'époque {start_epoch + 1}")
+        print(f"Meilleure loss connue : {best_loss:.4f}")
+
+    for epoch in range(start_epoch, num_epochs):
         model.train()
         total_loss = 0.0
 
         for batch_idx, (imgs, captions, lengths) in enumerate(dataloader):
-            imgs = imgs.to(device)
-            captions = captions.to(device)
+            imgs = imgs.to(device, non_blocking=True)
+            captions = captions.to(device, non_blocking=True)
 
-            outputs = model(imgs, captions[:, :-1])   # (B, seq_len, vocab_size)
-            outputs = outputs[:, 1:, :]               # enlever sortie liée à l'image
+            outputs = model(imgs, captions[:, :-1])
+            outputs = outputs[:, 1:, :]
 
-            targets = captions[:, 1:]                 # mots attendus
+            targets = captions[:, 1:]
             loss = criterion(
                 outputs.reshape(-1, vocab_size),
                 targets.reshape(-1)
@@ -79,6 +124,9 @@ def train():
 
             optimizer.zero_grad()
             loss.backward()
+
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             optimizer.step()
 
             total_loss += loss.item()
@@ -93,14 +141,21 @@ def train():
         avg_loss = total_loss / len(dataloader)
         print(f"Epoch [{epoch+1}/{num_epochs}] Loss moyenne: {avg_loss:.4f}")
 
-        save_path = os.path.join(
-            config["output"]["model_dir"],
-            f"model_epoch_{epoch+1}.pth"
-        )
-        torch.save(model.state_dict(), save_path)
-        print(f"Modèle sauvegardé : {save_path}")
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save(model.state_dict(), best_model_path)
+            print(f"🌟 Nouveau meilleur modèle sauvegardé : {best_model_path} (Loss: {best_loss:.4f})")
 
-    print("Entrainement termine !")
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "best_loss": best_loss,
+        }, checkpoint_path)
+
+        print(f"Checkpoint sauvegardé : {checkpoint_path}")
+
+    print("Entraînement terminé !")
 
 
 if __name__ == "__main__":

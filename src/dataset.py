@@ -1,78 +1,141 @@
 import os
 import torch
-from torch.utils.data import Dataset
 from PIL import Image
+from collections import Counter
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Dataset
 import torchvision.transforms as transforms
-from vocab import Vocabulary
+
+
+class Vocabulary:
+    def __init__(self, freq_threshold):
+        self.itos = {
+            0: "<pad>",
+            1: "<start>",
+            2: "<end>",
+            3: "<unk>"
+        }
+        self.stoi = {
+            "<pad>": 0,
+            "<start>": 1,
+            "<end>": 2,
+            "<unk>": 3
+        }
+        self.freq_threshold = freq_threshold
+
+    def __len__(self):
+        return len(self.itos)
+
+    def tokenizer(self, text):
+        return text.lower().strip().split()
+
+    def build_vocabulary(self, sentence_list):
+        frequencies = Counter()
+        idx = 4
+
+        for sentence in sentence_list:
+            for word in self.tokenizer(sentence):
+                frequencies[word] += 1
+                if frequencies[word] == self.freq_threshold:
+                    self.stoi[word] = idx
+                    self.itos[idx] = word
+                    idx += 1
+
+    def numericalize(self, text):
+        return [
+            self.stoi[token] if token in self.stoi else self.stoi["<unk>"]
+            for token in self.tokenizer(text)
+        ]
+
 
 class Flickr8kDataset(Dataset):
-    def __init__(self, img_dir, captions_file, train_file, vocab=None, freq_threshold=5):
+    def __init__(self, img_dir, captions_file, train_file, freq_threshold=5, transform=None):
         self.img_dir = img_dir
-
-        # Transformation appliquée à chaque image
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),       # redimensionner en 224x224
-            transforms.ToTensor(),               # convertir en tensor
-            transforms.Normalize(                # normaliser les pixels
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            )
+        self.transform = transform if transform is not None else transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor()
         ])
 
-        # Charger la liste des images d'entraînement
-        with open(train_file, "r") as f:
-            train_images = set(line.strip() for line in f.readlines())
-
-        # Charger les captions
         self.imgs = []
         self.captions = []
-        with open(captions_file, "r") as f:
-            for line in f.readlines():
-                parts = line.strip().split("\t")
-                if len(parts) != 2:
+
+        # Lire les images du split train
+        self.split_images = set()
+        with open(train_file, "r", encoding="utf-8") as f:
+            for line in f:
+                img_name = line.strip()
+                if not img_name:
                     continue
-                img_name = parts[0].split("#")[0]
-                caption = parts[1]
-                if img_name in train_images:
+                img_name = os.path.basename(img_name)
+                self.split_images.add(img_name)
+
+        # Lire captions Flickr30k version Kaggle
+        with open(captions_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+
+                # ignorer header ou lignes vides
+                if not line or line.startswith("image_name"):
+                    continue
+
+                # séparer seulement à la première virgule
+                parts = line.split(",", 1)
+                if len(parts) < 2:
+                    continue
+
+                img_name = os.path.basename(parts[0].strip())
+                caption = parts[1].strip().strip('"')
+
+                if img_name in self.split_images:
                     self.imgs.append(img_name)
                     self.captions.append(caption)
 
-        # Construire le vocabulaire
-        if vocab is None:
-            self.vocab = Vocabulary(freq_threshold)
-            self.vocab.build_vocabulary(self.captions)
-        else:
-            self.vocab = vocab
+        print("img_dir =", self.img_dir)
+        print("captions_file =", captions_file)
+        print("train_file =", train_file)
+        print("nb split_images =", len(self.split_images))
+        print("nb imgs gardées =", len(self.imgs))
+        print("nb captions gardées =", len(self.captions))
+
+        self.vocab = Vocabulary(freq_threshold)
+        self.vocab.build_vocabulary(self.captions)
 
     def __len__(self):
         return len(self.imgs)
 
-    def __getitem__(self, idx):
-        # Charger et transformer l'image
-        img_path = os.path.join(self.img_dir, self.imgs[idx])
+    def __getitem__(self, index):
+        caption = self.captions[index]
+        img_path = os.path.join(self.img_dir, self.imgs[index])
+
         image = Image.open(img_path).convert("RGB")
         image = self.transform(image)
 
-        # Convertir la caption en indices
-        caption = self.captions[idx]
-        tokens = [self.vocab.stoi["<start>"]]
-        tokens += self.vocab.numericalize(caption)
-        tokens += [self.vocab.stoi["<end>"]]
-        caption_tensor = torch.tensor(tokens, dtype=torch.long)
+        numericalized_caption = [self.vocab.stoi["<start>"]]
+        numericalized_caption += self.vocab.numericalize(caption)
+        numericalized_caption.append(self.vocab.stoi["<end>"])
 
-        return image, caption_tensor
+        return image, torch.tensor(numericalized_caption, dtype=torch.long)
+
+
+class MyCollate:
+    def __init__(self, pad_idx):
+        self.pad_idx = pad_idx
+
+    def __call__(self, batch):
+        imgs = [item[0].unsqueeze(0) for item in batch]
+        imgs = torch.cat(imgs, dim=0)
+
+        captions = [item[1] for item in batch]
+        lengths = [len(cap) for cap in captions]
+
+        captions = pad_sequence(
+            captions,
+            batch_first=True,
+            padding_value=self.pad_idx
+        )
+
+        return imgs, captions, lengths
 
 
 def collate_fn(batch):
-    """Permet de regrouper des captions de longueurs différentes en un batch."""
-    imgs, captions = zip(*batch)
-    imgs = torch.stack(imgs, 0)
-
-    # Padder les captions pour qu'elles aient toutes la même longueur
-    lengths = [len(cap) for cap in captions]
-    max_len = max(lengths)
-    padded = torch.zeros(len(captions), max_len, dtype=torch.long)
-    for i, cap in enumerate(captions):
-        padded[i, :len(cap)] = cap
-
-    return imgs, padded, torch.tensor(lengths)
+    return MyCollate(pad_idx=0)(batch)
