@@ -10,7 +10,7 @@ venv/
 .ipynb_checkpoints/
 .DS_Store
 
-
+printf ".DS_Store\n__pycache__/\n.spyproject/\n.vscode/\ndata/Flickr30k/\n*.pyc\nsrc.zip\n" >> .gitignore
 
 data/
 outputs/
