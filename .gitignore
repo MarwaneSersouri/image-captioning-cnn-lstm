@@ -1,16 +1,3 @@
-.vscode/
-src.zip
-.DS_Store
-
-__pycache__/
-*.pyc
-.venv/
-venv/
-.env
-.ipynb_checkpoints/
-.DS_Store
-
-printf ".DS_Store\n__pycache__/\n.spyproject/\n.vscode/\ndata/Flickr30k/\n*.pyc\nsrc.zip\n" >> .gitignore
-
-data/
-outputs/
+outputs/ 
+*.pth 
+*.h5 

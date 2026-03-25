@@ -1,31 +1,20 @@
-seed: 42
-
 data:
-  # Chemin absolu vers le dossier des images
-  img_dir: "/kaggle/input/datasets/adityajn105/flickr30k/Images"
-  
-  # Chemin exact que tu as trouvé avec la commande find
-  captions_file: "/kaggle/input/datasets/adityajn105/flickr30k/captions.txt"
-  
-  # Tes fichiers de split dans l'espace de travail (assure-toi qu'ils existent)
-  train_file: "/kaggle/working/data/Flickr30k/trainImages.txt"
-  dev_file: "/kaggle/working/data/Flickr30k/devImages.txt"
-  test_file: "/kaggle/working/data/Flickr30k/testImages.txt"
-
-output:
-  model_dir: "/kaggle/working/outputs"
+  img_dir: "data/Flicker8k_Dataset"
+  captions_file: "data/Flickr8k.token.txt"
+  train_file: "data/Flickr_8k.trainImages.txt"
+  test_file: "data/Flickr_8k.testImages.txt"
 
 model:
-  embed_size: 128
-  hidden_size: 256
+  embed_size: 256
+  hidden_size: 512
   num_layers: 1
-  dropout: 0.3
+  dropout: 0.5
 
 training:
-  batch_size: 16
+  batch_size: 32
   num_epochs: 20
-  learning_rate: 0.0001
-  freq_threshold: 10
+  learning_rate: 0.001
+  freq_threshold: 5
 
 output:
-  model_dir: "outputs"
+  model_dir: "outputs/"

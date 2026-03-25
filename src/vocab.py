@@ -1,79 +1,39 @@
+import re
 from collections import Counter
 
-
 class Vocabulary:
-    def __init__(self, min_freq=2):
-        self.min_freq = min_freq
-
-        self.pad_token = "<pad>"
-        self.start_token = "<start>"
-        self.end_token = "<end>"
-        self.unk_token = "<unk>"
-
-        self.stoi = {
-            self.pad_token: 0,
-            self.start_token: 1,
-            self.end_token: 2,
-            self.unk_token: 3,
-        }
-        self.itos = {idx: token for token, idx in self.stoi.items()}
+    def __init__(self, freq_threshold=5):
+        # Tokens spéciaux
+        self.itos = {0: "<pad>", 1: "<start>", 2: "<end>", 3: "<unk>"}
+        self.stoi = {v: k for k, v in self.itos.items()}
+        self.freq_threshold = freq_threshold  # ignorer les mots trop rares
 
     def __len__(self):
-        return len(self.stoi)
+        return len(self.itos)
 
-    def tokenize(self, text):
-        text = text.lower().strip()
-        text = text.replace(".", "")
-        text = text.replace(",", "")
-        text = text.replace("!", "")
-        text = text.replace("?", "")
-        text = text.replace(";", "")
-        text = text.replace(":", "")
-        text = text.replace('"', "")
-        text = text.replace("'", "")
-        tokens = text.split()
-        return tokens
+    @staticmethod
+    def tokenize(text):
+        # Mettre en minuscules et enlever la ponctuation
+        text = text.lower()
+        text = re.sub(r"[^a-z\s]", "", text)
+        return text.split()
 
-    def build_vocabulary(self, sentence_list):
-        frequencies = Counter()
+    def build_vocab(self, captions):
+        # Compter tous les mots dans toutes les captions
+        counter = Counter()
+        for caption in captions:
+            tokens = self.tokenize(caption)
+            counter.update(tokens)
 
-        for sentence in sentence_list:
-            tokens = self.tokenize(sentence)
-            frequencies.update(tokens)
-
-        idx = len(self.stoi)
-
-        for word, freq in frequencies.items():
-            if freq >= self.min_freq and word not in self.stoi:
+        # Ajouter les mots suffisamment fréquents
+        idx = len(self.itos)
+        for word, freq in counter.items():
+            if freq >= self.freq_threshold:
                 self.stoi[word] = idx
                 self.itos[idx] = word
                 idx += 1
 
     def numericalize(self, text):
+        # Convertir une phrase en liste d'indices
         tokens = self.tokenize(text)
-        return [
-            self.stoi[token] if token in self.stoi else self.stoi[self.unk_token]
-            for token in tokens
-        ]
-
-    def encode_caption(self, text):
-        return (
-            [self.stoi[self.start_token]]
-            + self.numericalize(text)
-            + [self.stoi[self.end_token]]
-        )
-
-    def decode_indices(self, indices):
-        words = []
-
-        for idx in indices:
-            word = self.itos.get(idx, self.unk_token)
-
-            if word == self.start_token or word == self.pad_token:
-                continue
-            if word == self.end_token:
-                break
-
-            words.append(word)
-
-        return " ".join(words)
+        return [self.stoi.get(token, self.stoi["<unk>"]) for token in tokens]
